@@ -12,6 +12,8 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 @Slf4j
 class BatcherTest {
     private Clock clock = Clock.systemUTC();
@@ -21,7 +23,7 @@ class BatcherTest {
 
     @Test
     public void test() {
-        int itemCount = 1005;
+        int itemCount = 1000;
         int maxParallelLoadCount = 10;
         int maxBatchSize = 100;
         int maxBatchDelayMillis = 3000;
@@ -35,14 +37,16 @@ class BatcherTest {
 
         long startMillis = clock.millis();
 
-        List<CompletableFuture<Timings>> futures = LongStream.range(1, itemCount)
+        List<CompletableFuture<Timings>> futures = LongStream.range(1, itemCount + 1)
                 .mapToObj(this::scheduleItemRequest)
                 .collect(Collectors.toList());
         futures.add(scheduleItemRequest(0L));
 
         List<Timings> timingsList = futures.stream()
                 .map(CompletableFuture::join)
-                .collect(Collectors.toList());
+                .toList();
+
+        batcher.shutdown();
 
         TimingsSummary summary = timingsList.stream()
                 .reduce(null, TimingsSummary::combine, (p, q) -> p);
@@ -50,6 +54,8 @@ class BatcherTest {
         log.info("Total millis(s): {}", durationMillis);
         log.info("{}", summary);
 
+        assertThat(summary.getFound()).isEqualTo(itemCount);
+        assertThat(summary.getNotFound()).isEqualTo(1);
     }
 
     private CompletableFuture<Timings> scheduleItemRequest(Long id) {
