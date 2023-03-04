@@ -2,4 +2,4 @@
 
 ## License
 
-[APL-2.0](./license.txt)
+[MIT-0](./license.txt)
