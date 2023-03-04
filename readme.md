@@ -1,4 +1,4 @@
-# Batcher - a batcher for buffered, parallel bulk loading.
+# Batcher - concurrent requests executed as parallel batches
 
 ## License
 
