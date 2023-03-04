@@ -25,6 +25,7 @@ public class Batcher<Key, Entity, Value> {
     private final Object LOCK = new Object();
     private final BatcherListener listener;
     private Batch batch;
+    private boolean shutdown = false;
 
     public Batcher(Clock clock, int maxParallelLoadCount, Function<List<Key>, List<Entity>> loadFunction, Function<Entity, Key> keyFunction, Function<Entity, Value> valueFunction, int maxBatchSize, long maxBatchDelayMillis,
                    BatcherListener listener) {
@@ -48,12 +49,13 @@ public class Batcher<Key, Entity, Value> {
                 fireBackgroundCheckTriggered();
                 log.trace("Background check if batch must be loaded.");
                 checkIfBatchMustBeLoaded(false);
+                if (!shutdown) {
+                    scheduleBatchTimeoutChecker();
+                }
             }
 
-            scheduleBatchTimeoutChecker();
         }, Math.max(maxBatchDelayMillis / 2, 100), TimeUnit.MILLISECONDS);
     }
-
 
     @SneakyThrows
     public Optional<Value> waitAndGet(Key key) {
@@ -67,6 +69,8 @@ public class Batcher<Key, Entity, Value> {
 
     private CompletableFuture<Batch> getLoadedBatchWithKey(Key key) {
         synchronized (LOCK) {
+            checkNotShutdownYet();
+
             if (batch == null) {
                 batch = new Batch();
                 listener.batchCreated(clock.millis(), batch.id);
@@ -80,6 +84,12 @@ public class Batcher<Key, Entity, Value> {
             checkIfBatchMustBeLoaded(false);
 
             return loadFuture;
+        }
+    }
+
+    private void checkNotShutdownYet() {
+        if (shutdown) {
+            throw new IllegalStateException("Batcher already shutdown.");
         }
     }
 
@@ -127,6 +137,11 @@ public class Batcher<Key, Entity, Value> {
 
     public void shutdown() {
         synchronized (LOCK) {
+            if (shutdown) {
+                return;
+            }
+
+            shutdown = true;
             checkIfBatchMustBeLoaded(true);
             fireShutdownTriggered();
             try {
