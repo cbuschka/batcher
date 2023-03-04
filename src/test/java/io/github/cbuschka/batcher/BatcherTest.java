@@ -23,18 +23,18 @@ class BatcherTest {
 
     @Test
     public void test() {
-        int itemCount = 1000;
+        int itemCount = 10_000;
         int maxParallelLoadCount = 9;
         int maxBatchSize = 100;
         int maxBatchDelayMillis = 500;
-        long bulkLoadDelayMillis = 1000L;
+        long bulkLoadDelayMillis = 30L;
         itemRepo = new ItemRepo(itemCount, bulkLoadDelayMillis);
-        executorService = Executors.newFixedThreadPool(itemCount);
+        executorService = Executors.newFixedThreadPool(Math.min(itemCount, 1000));
         BatcherEventCollector collector = new BatcherEventCollector(clock);
         batcher = new Batcher<>(clock,
                 maxParallelLoadCount, itemRepo::findByIds,
                 Item::getId, Item::getName,
-                maxBatchSize, maxBatchDelayMillis, collector);
+                maxBatchSize, maxBatchDelayMillis, collector, true);
 
         long startMillis = clock.millis();
 
@@ -59,7 +59,7 @@ class BatcherTest {
         assertThat(summary.getFound()).isEqualTo(itemCount);
         assertThat(summary.getNotFound()).isEqualTo(1);
 
-        collector.getEvents().forEach(System.err::println);
+        // collector.getEvents().forEach(System.err::println);
     }
 
     private CompletableFuture<Timings> scheduleItemRequest(Long id) {

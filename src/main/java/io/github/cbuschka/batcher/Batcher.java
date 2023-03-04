@@ -14,6 +14,8 @@ import java.util.stream.Collectors;
 @Slf4j
 public class Batcher<Key, Entity, Value> {
     private static final AtomicInteger idSeq = new AtomicInteger(0);
+    private final Object lock = new Object();
+    private final Metrics metrics = new Metrics();
     private final Clock clock;
     private final ExecutorService asyncLoadExecutor;
     private final ScheduledExecutorService backgroundExecutor;
@@ -21,31 +23,60 @@ public class Batcher<Key, Entity, Value> {
     private final Function<Entity, Key> keyFunction;
     private final Function<Entity, Value> valueFunction;
     private final int maxBatchSize;
-    private final long maxBatchDelayMillis;
-    private final Object LOCK = new Object();
+    private final long maxBatchAgeMillis;
     private final BatcherListener listener;
+    private final boolean metricsEnabled;
     private Batch batch;
     private boolean shutdown = false;
 
-    public Batcher(Clock clock, int maxParallelLoadCount, Function<List<Key>, List<Entity>> loadFunction, Function<Entity, Key> keyFunction, Function<Entity, Value> valueFunction, int maxBatchSize, long maxBatchDelayMillis,
-                   BatcherListener listener) {
+    public Batcher(Clock clock, int maxParallelLoadCount, Function<List<Key>, List<Entity>> loadFunction, Function<Entity, Key> keyFunction, Function<Entity, Value> valueFunction, int maxBatchSize, long maxBatchAgeMillis,
+                   BatcherListener listener, boolean metricsEnabled) {
         this.clock = clock;
         this.asyncLoadExecutor = Executors.newFixedThreadPool(maxParallelLoadCount);
-        this.backgroundExecutor = Executors.newScheduledThreadPool(1);
+        this.backgroundExecutor = Executors.newScheduledThreadPool(2);
         this.loadFunction = loadFunction;
         this.keyFunction = keyFunction;
         this.valueFunction = valueFunction;
         this.maxBatchSize = maxBatchSize;
-        this.maxBatchDelayMillis = maxBatchDelayMillis;
+        this.maxBatchAgeMillis = maxBatchAgeMillis;
         this.listener = (listener == null) ? new BatcherListener() {
         } : listener;
+        this.metricsEnabled = metricsEnabled;
 
         scheduleBatchTimeoutChecker();
+        scheduleMetricsChecker();
+    }
+
+    private void scheduleMetricsChecker() {
+        backgroundExecutor.schedule(() -> {
+            checkMetrics();
+
+            if (!shutdown) {
+                scheduleMetricsChecker();
+            }
+
+        }, 10, TimeUnit.SECONDS);
+    }
+
+    private void checkMetrics() {
+        if (!metricsEnabled || metrics.isEmpty()) {
+            return;
+        }
+
+        if (maxBatchAgeMillis > metrics.getAvgLoadDurationMillis()) {
+            log.warn("The avg batch load duration is {} milli(s), but max batch age is {} millis(s). Think about decreasing it.", metrics.getAvgLoadDurationMillis(), maxBatchAgeMillis);
+        }
+
+        if (metrics.getAvgBatchAgeMillis() > maxBatchAgeMillis * 0.9d) {
+            log.warn("The avg batch age is {} milli(s), but max batch delay is {} millis(s). Think about decreasing the batch size.", metrics.getAvgBatchAgeMillis(), maxBatchAgeMillis);
+        } else if (metrics.getAvgBatchSize() < maxBatchSize * 0.1d) {
+            log.warn("The avg batch size is {}. Think about decreasing the max batch size of {} it.", metrics.getAvgBatchSize(), maxBatchSize);
+        }
     }
 
     private void scheduleBatchTimeoutChecker() {
         backgroundExecutor.schedule(() -> {
-            synchronized (LOCK) {
+            synchronized (lock) {
                 fireBackgroundCheckTriggered();
                 log.trace("Background check if batch must be loaded.");
                 checkIfBatchMustBeLoaded(false);
@@ -54,7 +85,7 @@ public class Batcher<Key, Entity, Value> {
                 }
             }
 
-        }, Math.max(maxBatchDelayMillis / 2, 100), TimeUnit.MILLISECONDS);
+        }, Math.max(maxBatchAgeMillis / 2, 100), TimeUnit.MILLISECONDS);
     }
 
     @SneakyThrows
@@ -68,7 +99,7 @@ public class Batcher<Key, Entity, Value> {
     }
 
     private CompletableFuture<Batch> getLoadedBatchWithKey(Key key) {
-        synchronized (LOCK) {
+        synchronized (lock) {
             checkNotShutdownYet();
 
             if (batch == null) {
@@ -100,8 +131,12 @@ public class Batcher<Key, Entity, Value> {
             return;
         }
 
-        if (force || batch.keySize() >= maxBatchSize
-                || batch.createdAtMillis < clock.millis() - maxBatchDelayMillis) {
+        int batchSize = batch.keySize();
+        long batchAgeMillis = clock.millis() - batch.createdAtMillis;
+        if (force || batchSize >= maxBatchSize
+                || batchAgeMillis >= maxBatchAgeMillis) {
+            metrics.recordBatchSize(batchSize);
+            metrics.recordBatchAgeMillis(batchAgeMillis);
             startAsyncBatchLoad(batch);
             batch = null;
         } else {
@@ -122,7 +157,12 @@ public class Batcher<Key, Entity, Value> {
         @Override
         public void run() {
             try {
+                long loadStartMillis = clock.millis();
                 batch.load();
+                long loadEndMillis = clock.millis();
+                Batcher.this.metrics.recordLoadDurationMillis(loadEndMillis - loadStartMillis);
+
+
                 Batcher.this.listener.batchLoadCompleted(clock.millis(), batch.id);
                 log.debug("Batch batch={} loaded. Triggering load future.", batch);
                 batch.loadFuture.complete(batch);
@@ -133,10 +173,11 @@ public class Batcher<Key, Entity, Value> {
                 batch.loadFuture.completeExceptionally(ex);
             }
         }
+
     }
 
     public void shutdown() {
-        synchronized (LOCK) {
+        synchronized (lock) {
             if (shutdown) {
                 return;
             }
@@ -148,7 +189,7 @@ public class Batcher<Key, Entity, Value> {
 
         try {
             @SuppressWarnings("unused")
-            boolean ignored = this.asyncLoadExecutor.awaitTermination(maxBatchDelayMillis, TimeUnit.MILLISECONDS);
+            boolean ignored = this.asyncLoadExecutor.awaitTermination(maxBatchAgeMillis, TimeUnit.MILLISECONDS);
             this.asyncLoadExecutor.shutdownNow();
         } catch (Exception ex) {
             this.asyncLoadExecutor.shutdownNow();
@@ -156,7 +197,7 @@ public class Batcher<Key, Entity, Value> {
             this.backgroundExecutor.shutdownNow();
         }
 
-        synchronized (LOCK) {
+        synchronized (lock) {
             fireShutdownCompleted();
         }
     }
