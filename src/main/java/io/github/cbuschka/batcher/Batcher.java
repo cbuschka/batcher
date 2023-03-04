@@ -144,15 +144,19 @@ public class Batcher<Key, Entity, Value> {
             shutdown = true;
             checkIfBatchMustBeLoaded(true);
             fireShutdownTriggered();
-            try {
-                @SuppressWarnings("unused")
-                boolean ignored = this.asyncLoadExecutor.awaitTermination(maxBatchDelayMillis, TimeUnit.MILLISECONDS);
-                this.asyncLoadExecutor.shutdownNow();
-            } catch (Exception ex) {
-                this.asyncLoadExecutor.shutdownNow();
-            } finally {
-                this.backgroundExecutor.shutdownNow();
-            }
+        }
+
+        try {
+            @SuppressWarnings("unused")
+            boolean ignored = this.asyncLoadExecutor.awaitTermination(maxBatchDelayMillis, TimeUnit.MILLISECONDS);
+            this.asyncLoadExecutor.shutdownNow();
+        } catch (Exception ex) {
+            this.asyncLoadExecutor.shutdownNow();
+        } finally {
+            this.backgroundExecutor.shutdownNow();
+        }
+
+        synchronized (LOCK) {
             fireShutdownCompleted();
         }
     }
