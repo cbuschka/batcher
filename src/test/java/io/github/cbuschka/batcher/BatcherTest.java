@@ -47,6 +47,7 @@ class BatcherTest {
                 .toList();
 
         batcher.shutdown();
+        executorService.shutdownNow();
 
         TimingsSummary summary = timingsList.stream()
                 .reduce(null, TimingsSummary::combine, (p, q) -> p);
