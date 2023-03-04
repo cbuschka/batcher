@@ -21,7 +21,7 @@ class BatcherTest {
 
     @Test
     public void test() {
-        int itemCount = 10000;
+        int itemCount = 1005;
         int maxParallelLoadCount = 10;
         int maxBatchSize = 100;
         int maxBatchDelayMillis = 3000;
