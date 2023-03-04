@@ -1,15 +1,15 @@
 package io.github.cbuschka.batcher;
 
 import lombok.extern.slf4j.Slf4j;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,16 +24,17 @@ class BatcherTest {
     @Test
     public void test() {
         int itemCount = 1000;
-        int maxParallelLoadCount = 10;
+        int maxParallelLoadCount = 9;
         int maxBatchSize = 100;
-        int maxBatchDelayMillis = 3000;
+        int maxBatchDelayMillis = 500;
         long bulkLoadDelayMillis = 1000L;
         itemRepo = new ItemRepo(itemCount, bulkLoadDelayMillis);
         executorService = Executors.newFixedThreadPool(itemCount);
+        BatcherEventCollector collector = new BatcherEventCollector(clock);
         batcher = new Batcher<>(clock,
                 maxParallelLoadCount, itemRepo::findByIds,
                 Item::getId, Item::getName,
-                maxBatchSize, maxBatchDelayMillis);
+                maxBatchSize, maxBatchDelayMillis, collector);
 
         long startMillis = clock.millis();
 
@@ -57,6 +58,8 @@ class BatcherTest {
 
         assertThat(summary.getFound()).isEqualTo(itemCount);
         assertThat(summary.getNotFound()).isEqualTo(1);
+
+        collector.getEvents().forEach(System.err::println);
     }
 
     private CompletableFuture<Timings> scheduleItemRequest(Long id) {
@@ -64,14 +67,11 @@ class BatcherTest {
             try {
                 long startMillis = clock.millis();
                 log.debug("Asking for item id={}...", id);
-                Future<Optional<String>> future = batcher.get(id);
-                long gotFutureMillis = clock.millis();
-                log.debug("Got future for id={}. Waiting for value...", id);
-                Optional<String> optItemName = future.get();
+                Optional<String> optItemName = batcher.waitAndGet(id);
                 log.debug("Got optItemName={} for id={}.", optItemName, id);
                 long gotResultMillis = clock.millis();
-                return new Timings(gotFutureMillis - startMillis, gotResultMillis - gotFutureMillis, optItemName.isPresent());
-            } catch (InterruptedException | ExecutionException ex) {
+                return new Timings(gotResultMillis - startMillis, optItemName.isPresent());
+            } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
         }, this.executorService);

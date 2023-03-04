@@ -8,9 +8,6 @@ import lombok.ToString;
 @Getter
 @AllArgsConstructor
 class TimingsSummary {
-    private long minGotFutureAfterMillis;
-    private long avgGotFutureAfterMillis;
-    private long maxGotFutureAfterMillis;
     private long minGotResultAfterMillis;
     private long avgGotResultAfterMillis;
     private long maxGotResultAfterMillis;
@@ -23,16 +20,11 @@ class TimingsSummary {
 
     public static TimingsSummary combine(TimingsSummary s, Timings b) {
         if (s == null) {
-            return new TimingsSummary(b.gotFutureAfterMillis, b.gotFutureAfterMillis, b.gotFutureAfterMillis,
-                    b.gotResultAfterMillis, b.gotResultAfterMillis, b.gotResultAfterMillis,
+            return new TimingsSummary(b.gotResultAfterMillis, b.gotResultAfterMillis, b.gotResultAfterMillis,
                     b.found ? 1 : 0, b.found ? 0 : 1);
         }
 
         return new TimingsSummary(
-                Math.min(s.minGotFutureAfterMillis, b.gotFutureAfterMillis),
-                avg(s.avgGotFutureAfterMillis, b.gotFutureAfterMillis),
-                Math.max(s.maxGotFutureAfterMillis, b.gotFutureAfterMillis),
-
                 Math.min(s.minGotResultAfterMillis, b.gotResultAfterMillis),
                 avg(s.avgGotResultAfterMillis, b.gotResultAfterMillis),
                 Math.max(s.maxGotResultAfterMillis, b.gotResultAfterMillis),
